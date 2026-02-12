@@ -28,5 +28,17 @@
 			<artifactId>wos-ot</artifactId>
 			<version>${revision}</version>
 		</dependency>
+		<!-- API -->
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+		</dependency>
+		<!-- Runtime binding/implementation -->
+		<dependency>
+			<groupId>ch.qos.logback</groupId>
+			<artifactId>logback-classic</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
 	</dependencies>
 </project>

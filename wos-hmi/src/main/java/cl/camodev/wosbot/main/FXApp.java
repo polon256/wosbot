@@ -10,11 +10,16 @@ import javafx.scene.Scene;
 import javafx.scene.image.Image;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 
 import java.io.IOException;
+import java.util.Objects;
 import java.util.prefs.Preferences;
 
 public class FXApp extends Application {
+	private static final Logger logger = LoggerFactory.getLogger(FXApp.class);
 	private static final String KEY_X      = "windowX";
 	private static final String KEY_Y      = "windowY";
 	private static final String KEY_W      = "windowWidth";
@@ -31,7 +36,7 @@ public class FXApp extends Application {
 	@Override
 	public void start(Stage stage) throws IOException {
 		// Inicializar Preferences
-		Image appIcon = new Image(getClass().getResourceAsStream("/icons/appIcon.png"));
+		Image appIcon = new Image(Objects.requireNonNull(getClass().getResourceAsStream("/icons/appIcon.png")));
 		prefs = Preferences.userRoot().node(FXApp.class.getName());
 
 		// Cargar FXML y controlador
@@ -49,6 +54,9 @@ public class FXApp extends Application {
 		stage.getIcons().add(appIcon);
 		stage.setTitle("Launcher");
 
+        // set minimum height and width so the "run" button is always visible
+        stage.setMinHeight(750);
+        stage.setMinWidth(1050);
 		// Mostrar la ventana primero para que JavaFX calcule los tamaños correctamente
 		stage.show();
 
@@ -79,6 +87,15 @@ public class FXApp extends Application {
 			prefs.putDouble(KEY_Y, stage.getY());
 			prefs.putDouble(KEY_W, stage.getWidth());
 			prefs.putDouble(KEY_H, stage.getHeight());
+
+			// Kill adb.exe process
+			try {
+				new ProcessBuilder("taskkill", "/F", "/IM", "adb.exe").start();
+				logger.info("adb.exe process terminated.");
+			} catch (IOException e) {
+				logger.error("Failed to terminate adb.exe process: " + e.getMessage(), e);
+			}
+
 			System.exit(0);
 		});
 	}
@@ -126,6 +143,6 @@ public class FXApp extends Application {
 		stage.setX(finalX);
 		stage.setY(finalY);
 
-		System.out.println("Window positioned on primary screen due to invalid saved position");
+		logger.info("Window positioned on primary screen due to invalid saved position");
 	}
 }

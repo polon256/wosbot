@@ -5,99 +5,305 @@ import java.time.LocalDateTime;
 import cl.camodev.utiles.UtilTime;
 import cl.camodev.wosbot.console.enumerable.EnumConfigurationKey;
 import cl.camodev.wosbot.console.enumerable.EnumTemplates;
-import cl.camodev.wosbot.console.enumerable.EnumTpMessageSeverity;
 import cl.camodev.wosbot.console.enumerable.TpDailyTaskEnum;
 import cl.camodev.wosbot.ot.DTOImageSearchResult;
 import cl.camodev.wosbot.ot.DTOPoint;
 import cl.camodev.wosbot.ot.DTOProfiles;
 import cl.camodev.wosbot.serv.task.DelayedTask;
+import cl.camodev.wosbot.serv.task.EnumStartLocation;
+import cl.camodev.wosbot.serv.task.helper.TemplateSearchHelper.SearchConfig;
 
 public class LifeEssenceCaringTask extends DelayedTask {
 
+	// ===================== CONSTANTS =====================
+	// Navigation coordinates
+	private static final DTOPoint CARING_TAB_BUTTON = new DTOPoint(670, 100);
+	private static final DTOPoint BACK_TO_MAP_BUTTON = new DTOPoint(42, 28);
+
+	// Scroll coordinates
+	private static final DTOPoint MENU_SCROLL_START = new DTOPoint(220, 845);
+	private static final DTOPoint MENU_SCROLL_END = new DTOPoint(220, 94);
+	private static final DTOPoint ISLAND_LIST_SCROLL_START = new DTOPoint(350, 1100);
+	private static final DTOPoint ISLAND_LIST_SCROLL_END = new DTOPoint(350, 670);
+
+	// Retry limits
+	private static final int MAX_ISLAND_SCROLL_ATTEMPTS = 10;
+	private static final int MAX_CARING_BUTTON_SEARCHES = 3;
+
+	// Default configuration values
+	private static final int DEFAULT_RETRY_OFFSET_MINUTES = 60;
+
+	// Configuration (loaded fresh each execution)
+	private int retryOffsetMinutes;
 
 	public LifeEssenceCaringTask(DTOProfiles profile, TpDailyTaskEnum dailyMission) {
 		super(profile, dailyMission);
 	}
 
-	// i should go to essence tree, check if there's daily attempt available, if not, reschedule till daily reset,
 	@Override
 	protected void execute() {
+		logInfo("=== Starting Life Essence Caring Task ===");
 
-		logInfo( "going life essence");
-		emuManager.tapAtRandomPoint(EMULATOR_NUMBER, new DTOPoint(1, 509), new DTOPoint(24, 592));
-		// asegurarse de esta en el shortcut de ciudad
-		sleepTask(2000);
-		emuManager.tapAtPoint(EMULATOR_NUMBER, new DTOPoint(110, 270));
-		sleepTask(1000);
+		// Load configuration
+		loadConfiguration();
 
-		// hacer swipe hacia abajo
-		emuManager.executeSwipe(EMULATOR_NUMBER, new DTOPoint(220, 845), new DTOPoint(220, 94));
-		sleepTask(1000);
-		DTOImageSearchResult lifeEssenceMenu = emuManager.searchTemplate(EMULATOR_NUMBER, EnumTemplates.LIFE_ESSENCE_MENU.getTemplate(), 0, 0, 720, 1280, 90);
+		// Navigate to Life Essence menu
+		if (!navigateToLifeEssenceMenu()) {
+			logWarning("Failed to navigate to Life Essence menu. Retrying in " + retryOffsetMinutes + " minutes.");
+			reschedule(LocalDateTime.now().plusMinutes(retryOffsetMinutes));
+			return;
+		}
 
-		if (lifeEssenceMenu.isFound()) {
-			emuManager.tapAtRandomPoint(EMULATOR_NUMBER, lifeEssenceMenu.getPoint(), lifeEssenceMenu.getPoint());
-			sleepTask(3000);
-			emuManager.tapBackButton(EMULATOR_NUMBER);
-			emuManager.tapBackButton(EMULATOR_NUMBER);
-			sleepTask(500);
-			servLogs.appendLog(EnumTpMessageSeverity.INFO, taskName, profile.getName(), "Going to check if there's daily attempts available");
-			emuManager.tapAtPoint(EMULATOR_NUMBER, new DTOPoint(670, 100));
-			sleepTask(2000);
+		int islandsCared = 0;
+		for (int i = 0; i < 4; i++) {
+			// Check if daily attempts are available
+			if (!checkDailyAttemptsAvailable()) {
+				closeAllMenus();
+				reschedule(UtilTime.getGameReset());
+				return;
+			}
 
-			DTOImageSearchResult dailyAttempt = emuManager.searchTemplate(EMULATOR_NUMBER, EnumTemplates.LIFE_ESSENCE_DAILY_CARING_AVAILABLE.getTemplate(), 0, 0, 720, 1280, 90);
-			if (dailyAttempt.isFound()) {
-				logInfo( "Daily attempt available, proceeding with caring");
-
-				// bebo buscar y scrollear unas 7-8 veces, si no encuentro, reschedule de una hora
-
-				for (int i = 0; i < 8; i++) {
-					DTOImageSearchResult caringAvailable = emuManager.searchTemplate(EMULATOR_NUMBER, EnumTemplates.LIFE_ESSENCE_DAILY_CARING_GOTO_ISLAND.getTemplate(), 0, 0, 720, 1280, 90);
-					if (caringAvailable.isFound()) {
-						emuManager.tapAtRandomPoint(EMULATOR_NUMBER, caringAvailable.getPoint(), caringAvailable.getPoint());
-						sleepTask(5000);
-						logInfo( "Caring available, proceeding with caring");
-						// buscar el boton de caring, debo buscañpr un par de veces debido al movimiento
-
-						for (int j = 0; j < 3; j++) {
-							DTOImageSearchResult caringButton = emuManager.searchTemplate(EMULATOR_NUMBER, EnumTemplates.LIFE_ESSENCE_DAILY_CARING_BUTTON.getTemplate(), 0, 0, 720, 1280, 90);
-							if (caringButton.isFound()) {
-								emuManager.tapAtRandomPoint(EMULATOR_NUMBER, caringButton.getPoint(), caringButton.getPoint());
-								sleepTask(5000);
-								servLogs.appendLog(EnumTpMessageSeverity.INFO, taskName, profile.getName(), "Caring done successfully");
-								emuManager.tapAtPoint(EMULATOR_NUMBER, new DTOPoint(42, 28));
-								sleepTask(3000);
-								emuManager.tapAtPoint(EMULATOR_NUMBER, new DTOPoint(42, 28));
-								return;
-							}
-						}
-
-						return;
-					} else {
-						servLogs.appendLog(EnumTpMessageSeverity.INFO, taskName, profile.getName(), "Caring not found, scrolling down");
-						emuManager.executeSwipe(EMULATOR_NUMBER, new DTOPoint(350, 1100), new DTOPoint(350, 670));
-						sleepTask(2000);
-					}
+			// Attempt to find and care for an island
+			if (findAndCareForIsland()) {
+				islandsCared++;
+				logInfo("Life Essence caring completed successfully for " + islandsCared + " islands.");
+				if (islandsCared >= 3) {
+					logInfo("Life Essence caring completed successfully for all islands today. Rescheduling for next game reset.");
+					closeAllMenus();
+					reschedule(UtilTime.getGameReset());
+					return;
 				}
-
-				LocalDateTime nextSchedule = LocalDateTime.now().plusHours(profile.getConfig(EnumConfigurationKey.ALLIANCE_LIFE_ESSENCE_OFFSET_INT, Integer.class));
-				this.reschedule(nextSchedule);
-				logInfo("No caring available after multiple attempts");
-
-				emuManager.tapAtPoint(EMULATOR_NUMBER, new DTOPoint(42, 28));
-				sleepTask(3000);
-				emuManager.tapAtPoint(EMULATOR_NUMBER, new DTOPoint(42, 28));
-
-			} else {
-				servLogs.appendLog(EnumTpMessageSeverity.INFO, taskName, profile.getName(), "No daily attempts available, rescheduling for next day");
-				this.reschedule(UtilTime.getGameReset());
-				servScheduler.updateDailyTaskStatus(profile, tpTask, UtilTime.getGameReset());
-				emuManager.tapAtPoint(EMULATOR_NUMBER, new DTOPoint(42, 28));
-				sleepTask(3000);
-				emuManager.tapAtPoint(EMULATOR_NUMBER, new DTOPoint(42, 28));
 			}
 		}
 
+		// No island found - retry later
+		logInfo("No island needing care found. Rescheduling in " + retryOffsetMinutes + " minutes.");
+		closeAllMenus();
+		reschedule(LocalDateTime.now().plusMinutes(retryOffsetMinutes));
+	}
+
+	/**
+	 * Load configuration from profile after refresh
+	 */
+	private void loadConfiguration() {
+		Integer configOffset = profile.getConfig(
+				EnumConfigurationKey.ALLIANCE_LIFE_ESSENCE_OFFSET_INT,
+				Integer.class);
+
+		this.retryOffsetMinutes = (configOffset != null && configOffset > 0)
+				? configOffset
+				: DEFAULT_RETRY_OFFSET_MINUTES;
+
+		logDebug("Configuration loaded: retryOffsetMinutes=" + retryOffsetMinutes);
+	}
+
+	/**
+	 * Navigate to the Life Essence menu
+	 * 
+	 * Navigation flow:
+	 * 1. Open side menu shortcut
+	 * 2. Switch to City tab
+	 * 3. Scroll down to reveal Life Essence option
+	 * 4. Tap Life Essence menu
+	 * 5. Back out twice to close overview (needed for claim detection)
+	 * 
+	 * @return true if navigation successful, false otherwise
+	 */
+	private boolean navigateToLifeEssenceMenu() {
+		logInfo("Navigating to Life Essence menu");
+
+		// Open side menu
+		marchHelper.openLeftMenuCitySection(true);
+
+		// Scroll down to reveal Life Essence menu
+		logDebug("Scrolling to reveal Life Essence menu");
+		swipe(MENU_SCROLL_START, MENU_SCROLL_END);
+		sleepTask(1000); // Wait for scroll to settle
+
+		// Search for Life Essence menu option
+		DTOImageSearchResult lifeEssenceMenu = templateSearchHelper.searchTemplate(
+				EnumTemplates.LIFE_ESSENCE_MENU,
+				SearchConfig.builder().build());
+
+		// Try second swipe if not found
+		if (!lifeEssenceMenu.isFound()) {
+			logDebug("Life Essence menu not visible. Trying second swipe.");
+			swipe(MENU_SCROLL_START, MENU_SCROLL_END);
+			sleepTask(1000); // Wait for scroll
+
+			lifeEssenceMenu = templateSearchHelper.searchTemplate(
+					EnumTemplates.LIFE_ESSENCE_MENU,
+					SearchConfig.builder().build());
+		}
+
+		if (!lifeEssenceMenu.isFound()) {
+			logWarning("Life Essence menu not found after scrolling");
+			return false;
+		}
+
+		// Open Life Essence menu
+		logInfo("Life Essence menu found. Opening.");
+		tapPoint(lifeEssenceMenu.getPoint());
+		sleepTask(3000); // Wait for menu to fully load
+
+		// Back out twice to close the overview screen
+		logDebug("Closing overview screen (2x back button)");
+		tapBackButton();
+		sleepTask(500); // Short delay between backs
+		tapBackButton();
+		sleepTask(1000); // Wait for UI to settle
+
+		logInfo("Successfully navigated to Life Essence area");
+		return true;
+	}
+
+	/**
+	 * Check if daily caring attempts are available
+	 * 
+	 * UI Navigation:
+	 * 1. Close the Life Essence overview (back button twice)
+	 * 2. Open the Caring tab (top-right icon)
+	 * 3. Search for "Daily Caring Available" indicator
+	 * 
+	 * @return true if attempts available, false if exhausted
+	 */
+	private boolean checkDailyAttemptsAvailable() {
+		logInfo("Checking for daily caring attempts");
+
+		// Open the Caring tab (alliance caring list)
+		logDebug("Opening Caring tab");
+		tapPoint(CARING_TAB_BUTTON);
+		sleepTask(2000);
+
+		// Search for daily attempt indicator
+		DTOImageSearchResult dailyAttemptIndicator = templateSearchHelper.searchTemplate(
+				EnumTemplates.LIFE_ESSENCE_DAILY_CARING_AVAILABLE,
+				SearchConfig.builder().build());
+
+		if (dailyAttemptIndicator.isFound()) {
+			logInfo("Daily caring attempt is available");
+			return true;
+		}
+
+		logInfo("No daily caring attempts remaining. Rescheduling for next game reset.");
+		return false;
+	}
+
+	/**
+	 * Search through the alliance island list to find one that needs caring
+	 * 
+	 * Strategy:
+	 * 1. Scroll through island list (up to MAX_ISLAND_SCROLL_ATTEMPTS times)
+	 * 2. Look for "Go to Island" button on each screen
+	 * 3. If found, navigate to island and perform caring
+	 * 
+	 * @return true if island found and cared for, false if none found
+	 */
+	private boolean findAndCareForIsland() {
+		logInfo("Searching for island that needs caring");
+
+		for (int scrollAttempt = 0; scrollAttempt < MAX_ISLAND_SCROLL_ATTEMPTS; scrollAttempt++) {
+			logDebug("Searching islands on screen (scroll attempt " + (scrollAttempt + 1) +
+					"/" + MAX_ISLAND_SCROLL_ATTEMPTS + ")");
+
+			// Search for "Go to Island" button indicating island needs care
+			DTOImageSearchResult gotoIslandButton = templateSearchHelper.searchTemplate(
+					EnumTemplates.LIFE_ESSENCE_DAILY_CARING_GOTO_ISLAND,
+					SearchConfig.builder().build());
+
+			if (gotoIslandButton.isFound()) {
+				logInfo("Found island needing care (after " + (scrollAttempt + 1) + " scroll(s))");
+				return performCaringOnIsland(gotoIslandButton);
+			}
+
+			// Not found on this screen - scroll down to see more islands
+			if (scrollAttempt < MAX_ISLAND_SCROLL_ATTEMPTS - 1) {
+				logDebug("No island found on this screen. Scrolling to see more islands.");
+				swipe(ISLAND_LIST_SCROLL_START, ISLAND_LIST_SCROLL_END);
+				sleepTask(2000);
+			}
+		}
+
+		logInfo("No island needing care found after " + MAX_ISLAND_SCROLL_ATTEMPTS + " scroll attempts");
+		return false;
+	}
+
+	/**
+	 * Navigate to an island and perform the caring action
+	 * 
+	 * Process:
+	 * 1. Click "Go to Island" button to navigate to island on map
+	 * 2. Wait for map navigation to complete
+	 * 3. Search for "Caring" button on the island
+	 * 4. Click caring button to complete the action
+	 * 5. Return to world map
+	 * 
+	 * @param gotoButton The button to navigate to the island
+	 * @return true if caring performed successfully, false if button not found
+	 */
+	private boolean performCaringOnIsland(DTOImageSearchResult gotoButton) {
+		logInfo("Navigating to island location");
+
+		// Click "Go to Island" to navigate on world map
+		tapPoint(gotoButton.getPoint());
+		sleepTask(5000);
+
+		// Search for the caring button multiple times
+		// (May take a moment for island UI to fully load after navigation)
+		for (int attempt = 0; attempt < MAX_CARING_BUTTON_SEARCHES; attempt++) {
+			logDebug("Searching for caring button (attempt " + (attempt + 1) +
+					"/" + MAX_CARING_BUTTON_SEARCHES + ")");
+
+			DTOImageSearchResult caringButton = templateSearchHelper.searchTemplate(
+					EnumTemplates.LIFE_ESSENCE_DAILY_CARING_BUTTON,
+					SearchConfig.builder().build());
+
+			if (caringButton.isFound()) {
+				logInfo("Caring button found. Performing caring action.");
+
+				// Click the caring button
+				tapPoint(caringButton.getPoint());
+				sleepTask(5000);
+
+				// Go back to our island view we're back on main map
+				tapPoint(BACK_TO_MAP_BUTTON);
+				sleepTask(3000);
+
+				logInfo("Caring action completed successfully");
+				return true;
+			}
+
+			// Not found yet - wait a bit longer for UI to load
+			if (attempt < MAX_CARING_BUTTON_SEARCHES - 1) {
+				sleepTask(1000);
+			}
+		}
+
+		logWarning("Caring button not found after " + MAX_CARING_BUTTON_SEARCHES +
+				" attempts. Island may not need care or UI didn't load properly.");
+
+		// Return to world map even if caring failed
+		tapPoint(BACK_TO_MAP_BUTTON);
+		sleepTask(1000);
+
+		return false;
+	}
+
+	/**
+	 * Close all menus and return to world map
+	 * 
+	 * Uses multiple taps of the back-to-map button to ensure
+	 * all overlays and menus are closed
+	 */
+	private void closeAllMenus() {
+		logDebug("Closing all menus and returning to world map");
+		sleepTask(300);
+		tapRandomPoint(BACK_TO_MAP_BUTTON, BACK_TO_MAP_BUTTON, 2, 1000);
+	}
+
+	@Override
+	protected EnumStartLocation getRequiredStartLocation() {
+		return EnumStartLocation.ANY;
 	}
 
 }

@@ -2,12 +2,7 @@ package cl.camodev.wosbot.serv.impl;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.EnumMap;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -32,6 +27,8 @@ import cl.camodev.wosbot.ot.DTODailyTaskStatus;
 import cl.camodev.wosbot.ot.DTOProfiles;
 import cl.camodev.wosbot.ot.DTOTaskState;
 import cl.camodev.wosbot.serv.IBotStateListener;
+import cl.camodev.wosbot.ot.DTOQueueState;
+import cl.camodev.wosbot.serv.IQueueStateListener;
 import cl.camodev.wosbot.serv.task.DelayedTask;
 import cl.camodev.wosbot.serv.task.DelayedTaskRegistry;
 import cl.camodev.wosbot.serv.task.TaskQueue;
@@ -42,7 +39,8 @@ public class ServScheduler {
 
 	private final TaskQueueManager queueManager = new TaskQueueManager();
 
-	private List<IBotStateListener> listeners = new ArrayList<IBotStateListener>();
+        private List<IBotStateListener> listeners = new ArrayList<IBotStateListener>();
+        private List<IQueueStateListener> queueStateListeners = new ArrayList<IQueueStateListener>();
 
 	private IDailyTaskRepository iDailyTaskRepository = DailyTaskRepository.getRepository();
 
@@ -91,9 +89,9 @@ public class ServScheduler {
 			TaskQueueManager queueManager = ServScheduler.getServices().getQueueManager();
 			DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd-MM-yyyy HH:mm:ss");
 
-			profiles.stream().filter(DTOProfiles::getEnabled).sorted((a, b) -> a.getId().compareTo(b.getId())).forEach(profile -> {
+			profiles.stream().filter(DTOProfiles::getEnabled).sorted(Comparator.comparing(DTOProfiles::getPriority).reversed()).forEach(profile -> {
 				profile.setGlobalSettings(globalsettings);
-				ServLogs.getServices().appendLog(EnumTpMessageSeverity.DEBUG, "ServScheduler", "-", "starting queue");
+				ServLogs.getServices().appendLog(EnumTpMessageSeverity.DEBUG, "ServScheduler", "-", "Starting queue");
 
 				queueManager.createQueue(profile);
 				TaskQueue queue = queueManager.getQueue(profile.getId());
@@ -113,7 +111,7 @@ public class ServScheduler {
 						for (Supplier<DelayedTask> sup : suppliers) {
 							DelayedTask task = sup.get();
 
-							// Construir estado y encolar
+							// Build state and enqueue
 							DTOTaskState taskState = new DTOTaskState();
 							taskState.setProfileId(profile.getId());
 							taskState.setTaskId(task.getTpTask().getId());
@@ -121,27 +119,35 @@ public class ServScheduler {
 							taskState.setScheduled(true);
 
 							DTODailyTaskStatus status = taskSchedules.get(task.getTpDailyTaskId());
-							if (status != null) {
-								LocalDateTime next = status.getNextSchedule();
-								task.reschedule(next);
-								taskState.setLastExecutionTime(status.getLastExecution());
-								taskState.setNextExecutionTime(next);
-								ServLogs.getServices().appendLog(EnumTpMessageSeverity.INFO, task.getTaskName(), profile.getName(), "Next Execution: " + next.format(fmt));
-							} else {
-								task.reschedule(LocalDateTime.now());
-								taskState.setLastExecutionTime(null);
-								taskState.setNextExecutionTime(task.getScheduled());
-								ServLogs.getServices().appendLog(EnumTpMessageSeverity.INFO, task.getTaskName(), profile.getName(), "Task not completed, scheduling for today");
-							}
-
-							ServTaskManager.getInstance().setTaskState(profile.getId(), taskState);
+                			if (status != null) {
+                                LocalDateTime next = status.getNextSchedule();
+                                task.reschedule(next);
+                                task.setLastExecutionTime(status.getLastExecution());
+                                taskState.setLastExecutionTime(status.getLastExecution());
+                                taskState.setNextExecutionTime(next);
+                                ServLogs.getServices().appendLog(EnumTpMessageSeverity.INFO, task.getTaskName(), profile.getName(), "Next Execution: " + next.format(fmt));
+                            } else {
+                                // Don't reschedule if task already has a schedule (from constructor)
+                                LocalDateTime scheduledTime = task.getScheduled();
+                                if (scheduledTime == null) {
+                                    task.reschedule(LocalDateTime.now());
+                                    ServLogs.getServices().appendLog(EnumTpMessageSeverity.INFO, task.getTaskName(), profile.getName(), 
+                                        "Task not completed and no schedule set, scheduling for now");
+                                } else {
+                                    ServLogs.getServices().appendLog(EnumTpMessageSeverity.INFO, task.getTaskName(), profile.getName(), 
+                                        "Using initial schedule: " + scheduledTime.format(fmt));
+                                }
+                                taskState.setLastExecutionTime(null);
+                                taskState.setNextExecutionTime(task.getScheduled());
+                            }							ServTaskManager.getInstance().setTaskState(profile.getId(), taskState);
 							queue.addTask(task);
 						}
 					}
 				});
 			});
 
-			queueManager.startQueues();
+                        queueManager.startQueues();
+                        notifyQueueState(null, false);
 
 			listeners.forEach(e -> {
 				DTOBotState state = new DTOBotState();
@@ -155,56 +161,91 @@ public class ServScheduler {
 
 	}
 
-	public void registryBotStateListener(IBotStateListener listener) {
+        public void registryBotStateListener(IBotStateListener listener) {
 
-		if (listeners == null) {
-			listeners = new ArrayList<IBotStateListener>();
-		}
-		listeners.add(listener);
-	}
+                if (listeners == null) {
+                        listeners = new ArrayList<IBotStateListener>();
+                }
+                listeners.add(listener);
+        }
 
-	public void stopBot() {
-		queueManager.stopQueues();
+        public void registryQueueStateListener(IQueueStateListener listener) {
 
-		listeners.forEach(e -> {
-			DTOBotState state = new DTOBotState();
+                if (queueStateListeners == null) {
+                        queueStateListeners = new ArrayList<IQueueStateListener>();
+                }
+                queueStateListeners.add(listener);
+        }
+
+        public void stopBot() {
+                queueManager.stopQueues();
+
+                listeners.forEach(e -> {
+                        DTOBotState state = new DTOBotState();
 			state.setRunning(false);
 			state.setPaused(false);
-			state.setActionTime(LocalDateTime.now());
-			e.onBotStateChange(state);
-		});
-	}
+                        state.setActionTime(LocalDateTime.now());
+                        e.onBotStateChange(state);
+                });
+                notifyQueueState(null, false);
+        }
 
-	public void pauseBot() {
-		queueManager.pauseQueues();
+        public void pauseBot() {
+                queueManager.pauseQueues();
 
-		listeners.forEach(e -> {
-			DTOBotState state = new DTOBotState();
+                listeners.forEach(e -> {
+                        DTOBotState state = new DTOBotState();
 			state.setRunning(true);
 			state.setPaused(true);
-			state.setActionTime(LocalDateTime.now());
-			e.onBotStateChange(state);
-		});
-	}
+                        state.setActionTime(LocalDateTime.now());
+                        e.onBotStateChange(state);
+                });
+                notifyQueueState(null, true);
+        }
 
-	public void resumeBot() {
-		queueManager.resumeQueues();
+        public void resumeBot() {
+                queueManager.resumeQueues();
 
-		listeners.forEach(e -> {
-			DTOBotState state = new DTOBotState();
+                listeners.forEach(e -> {
+                        DTOBotState state = new DTOBotState();
 			state.setRunning(true);
 			state.setPaused(false);
-			state.setActionTime(LocalDateTime.now());
-			e.onBotStateChange(state);
-		});
-	}
+                        state.setActionTime(LocalDateTime.now());
+                        e.onBotStateChange(state);
+                });
+                notifyQueueState(null, false);
+        }
+
+        public void pauseQueue(Long profileId) {
+                if (profileId != null) {
+                        queueManager.pauseQueue(profileId);
+                        notifyQueueState(profileId, true);
+                }
+        }
+
+        public void resumeQueue(Long profileId) {
+                if (profileId != null) {
+                        queueManager.resumeQueue(profileId);
+                        notifyQueueState(profileId, false);
+                }
+        }
+
+        private void notifyQueueState(Long profileId, boolean paused) {
+                if (queueStateListeners == null || queueStateListeners.isEmpty()) {
+                        return;
+                }
+
+                DTOQueueState state = new DTOQueueState(profileId, paused,
+                                queueManager.getActiveQueueStates());
+                queueStateListeners.forEach(listener -> listener.onQueueStateChange(state));
+        }
 
 	public void updateDailyTaskStatus(DTOProfiles profile, TpDailyTaskEnum task, LocalDateTime nextSchedule) {
 
 		DailyTask dailyTask = iDailyTaskRepository.findByProfileIdAndTaskName(profile.getId(), task);
 
 		if (dailyTask == null) {
-			// Crear nueva tarea si no existe
+			// Create new task if it doesn't exist
 			dailyTask = new DailyTask();
 
 			Profile profileEntity = iProfileRepository.getProfileById(profile.getId());
@@ -219,8 +260,52 @@ public class ServScheduler {
 		dailyTask.setLastExecution(LocalDateTime.now());
 		dailyTask.setNextSchedule(nextSchedule);
 
-		// Guardar la entidad (ya sea nueva o existente)
+		// Save the entity (whether new or existing)
 		iDailyTaskRepository.saveDailyTask(dailyTask);
+	}
+
+	/**
+	 * Removes a task from the scheduler for a specific profile
+	 * @param profileId The profile ID
+	 * @param taskEnum The task to remove
+	 */
+	public void removeTaskFromScheduler(Long profileId, TpDailyTaskEnum taskEnum) {
+		try {
+			// Get the task queue for the profile
+			TaskQueue queue = queueManager.getQueue(profileId);
+			if (queue != null) {
+				// Remove the task from the queue
+				boolean removedFromQueue = queue.removeTask(taskEnum);
+				ServLogs.getServices().appendLog(EnumTpMessageSeverity.INFO, "Scheduler",
+					"Profile " + profileId, "Removing task " + taskEnum.getName() + " from scheduler. Removed from queue: " + removedFromQueue);
+			} else {
+				ServLogs.getServices().appendLog(EnumTpMessageSeverity.WARNING, "Scheduler",
+					"Profile " + profileId, "No queue found for profile when removing task " + taskEnum.getName());
+			}
+
+			// Update task state in ServTaskManager to reflect removal
+			DTOTaskState taskState = new DTOTaskState();
+			taskState.setProfileId(profileId);
+			taskState.setTaskId(taskEnum.getId());
+			taskState.setScheduled(false);
+			taskState.setExecuting(false);
+			taskState.setLastExecutionTime(LocalDateTime.now());
+			taskState.setNextExecutionTime(null);
+			ServTaskManager.getInstance().setTaskState(profileId, taskState);
+
+			// Notify listeners about the change
+			listeners.forEach(listener -> {
+				DTOBotState state = new DTOBotState();
+				state.setRunning(true);
+				state.setPaused(false);
+				state.setActionTime(LocalDateTime.now());
+				listener.onBotStateChange(state);
+			});
+
+		} catch (Exception e) {
+			ServLogs.getServices().appendLog(EnumTpMessageSeverity.ERROR, "Scheduler",
+				"Profile " + profileId, "Error removing task " + taskEnum.getName() + ": " + e.getMessage());
+		}
 	}
 
 	public void saveEmulatorPath(String enumConfigurationKey, String filePath) {
@@ -232,11 +317,11 @@ public class ServScheduler {
 			TpConfig tpConfig = iConfigRepository.getTpConfig(TpConfigEnum.GLOBAL_CONFIG);
 			config = new Config();
 			config.setKey(enumConfigurationKey);
-			config.setValor(filePath);
+			config.setValue(filePath);
 			config.setTpConfig(tpConfig);
 			iConfigRepository.addConfig(config);
 		} else {
-			config.setValor(filePath);
+			config.setValue(filePath);
 			iConfigRepository.saveConfig(config);
 		}
 	}

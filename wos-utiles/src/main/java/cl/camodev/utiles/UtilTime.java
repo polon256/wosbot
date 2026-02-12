@@ -1,10 +1,10 @@
 package cl.camodev.utiles;
 
-import java.time.Duration;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
+import java.time.*;
 import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class UtilTime {
 
@@ -76,5 +76,61 @@ public class UtilTime {
 		}
 	}
 
+    /**
+     * Ensures a scheduled time doesn't go beyond the game reset time.
+     * If the proposed schedule time is after game reset, returns a time 5 minutes before game reset.
+     * 
+     * @param proposedSchedule The proposed schedule time
+     * @return The adjusted schedule time (either the original time or 5 minutes before reset)
+     */
+    public static LocalDateTime ensureBeforeGameReset(LocalDateTime proposedSchedule) {
+        LocalDateTime gameReset = getGameReset();
+        LocalDateTime fiveMinutesBeforeReset = gameReset.minusMinutes(5);
+        
+        if (proposedSchedule.isAfter(fiveMinutesBeforeReset)) {
+            return fiveMinutesBeforeReset;
+        }
+        
+        return proposedSchedule;
+    }
 
+    /**
+     * Returns the next Monday at 00:00 UTC in the system's local timezone.
+     * If it's already Monday before midnight UTC, returns next week's Monday.
+     *
+     * @return LocalDateTime representing the next Monday at 00:00 UTC
+     */
+    public static LocalDateTime getNextMondayUtc() {
+        ZonedDateTime nowUtc = ZonedDateTime.now(ZoneId.of("UTC"));
+        ZonedDateTime nextMondayUtc = nowUtc.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
+                .truncatedTo(ChronoUnit.DAYS);
+        return nextMondayUtc.withZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+    }
+
+    /**
+     * Parses a time string in the format "HH:mm:ss" or "H:mm:ss" and converts it to total seconds.
+     * If the input is invalid or null, returns -1.
+     *
+     * @param timeStr The time string to parse
+     * @return The total time in seconds
+     */
+    public static long parseTimeToSeconds(String timeStr) {
+        if (timeStr == null || timeStr.trim().isEmpty()) {
+            return -1;
+        }
+        Pattern pattern = Pattern.compile("(\\d{1,2}):(\\d{2}):(\\d{2})");
+        Matcher matcher = pattern.matcher(timeStr.trim());
+        if (matcher.find()) {
+            try {
+                int hours = Integer.parseInt(matcher.group(1));
+                int minutes = Integer.parseInt(matcher.group(2));
+                int seconds = Integer.parseInt(matcher.group(3));
+                return (long) hours * 3600 + (long) minutes * 60 + seconds;
+            } catch (NumberFormatException e) {
+                System.out.println("Unable to parse time: " + timeStr);
+            }
+        }
+
+        return -1;
+    }
 }

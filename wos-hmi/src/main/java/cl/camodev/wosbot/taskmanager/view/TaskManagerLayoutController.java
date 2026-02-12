@@ -5,8 +5,10 @@ import cl.camodev.wosbot.console.enumerable.TpDailyTaskEnum;
 import cl.camodev.wosbot.ot.DTODailyTaskStatus;
 import cl.camodev.wosbot.ot.DTOProfiles;
 import cl.camodev.wosbot.ot.DTOTaskState;
+import cl.camodev.wosbot.serv.IProfileDataChangeListener;
 import cl.camodev.wosbot.serv.impl.ServProfiles;
 import cl.camodev.wosbot.serv.impl.ServScheduler;
+import cl.camodev.wosbot.serv.task.TaskQueue;
 import cl.camodev.wosbot.taskmanager.controller.TaskManagerActionController;
 import cl.camodev.wosbot.taskmanager.model.TaskManagerAux;
 import javafx.animation.Animation;
@@ -18,10 +20,13 @@ import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.collections.transformation.FilteredList;
 import javafx.fxml.FXML;
+import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.layout.HBox;
 import javafx.util.Duration;
 
 import java.time.LocalDateTime;
@@ -30,7 +35,11 @@ import java.util.*;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
-public class TaskManagerLayoutController {
+public class TaskManagerLayoutController implements IProfileDataChangeListener {
+
+	public Node getSceneNode() {
+		return tabPaneProfiles;
+	}
 
 	private static final Comparator<TaskManagerAux> TASK_AUX_COMPARATOR = (a, b) -> {
 		if (a.isScheduled() && !b.isScheduled())
@@ -47,25 +56,162 @@ public class TaskManagerLayoutController {
 			return 1;
 		return Long.compare(a.getNearestMinutesUntilExecution(), b.getNearestMinutesUntilExecution());
 	};
-	private final Image iconTrue = new Image(getClass().getResourceAsStream("/icons/indicators/green.png"));
-	private final Image iconFalse = new Image(getClass().getResourceAsStream("/icons/indicators/red.png"));
+
+	private final Image iconTrue = new Image(Objects.requireNonNull(getClass().getResourceAsStream("/icons/indicators/green.png")));
+    private final Image iconFalse = new Image(Objects.requireNonNull(getClass().getResourceAsStream("/icons/indicators/red.png")));
+    private final Image iconWaiting = new Image(Objects.requireNonNull(getClass().getResourceAsStream("/icons/indicators/yellow.png")));
+    private final Image iconIdle = new Image(Objects.requireNonNull(getClass().getResourceAsStream("/icons/indicators/grey.png")));
 	private final ObjectProperty<LocalDateTime> globalClock = new SimpleObjectProperty<>(LocalDateTime.now());
 	private final Map<Long, Tab> profileTabsMap = new HashMap<>();
 	private final Map<Long, ObservableList<TaskManagerAux>> tasks = new HashMap<>();
-	private TaskManagerActionController taskManagerActionController = new TaskManagerActionController(this);
+	private final Map<Long, FilteredList<TaskManagerAux>> filteredTasks = new HashMap<>();
+	private final TaskManagerActionController taskManagerActionController = new TaskManagerActionController(this);
+
 	@FXML
 	private TabPane tabPaneProfiles;
 
 	@FXML
-	private void initialize() {
-		loadProfiles();
+	private TextField txtFilterTaskName;
 
-		Timeline ticker = new Timeline(new KeyFrame(Duration.seconds(5), evt -> {
-			globalClock.set(LocalDateTime.now());
-		}));
+	@FXML
+	private Button btnToggleView;
+	
+	@FXML
+	private javafx.scene.layout.VBox ganttViewContainer;
+	
+	private boolean showingGanttView = false;
+	private Node ganttViewNode = null;
+	private TaskGanttOverviewController ganttViewController = null;
+
+	@FXML
+	public void initialize() {
+		ServProfiles.getServices().addProfileDataChangeListener(this);
+		loadProfiles();
+		setupFilterListener();
+
+		Timeline ticker = new Timeline(new KeyFrame(Duration.seconds(1), evt -> updateTimeValues()));
 		ticker.setCycleCount(Animation.INDEFINITE);
 		ticker.play();
+	}
+	
+	@FXML
+	private void handleToggleView() {
+		showingGanttView = !showingGanttView;
+		
+		if (showingGanttView) {
+			// Show Gantt view
+			showGanttView();
+			btnToggleView.setText("📋 Table View");
+		} else {
+			// Show standard table view
+			showTableView();
+			btnToggleView.setText("📊 Timeline View");
+		}
+	}
+	
+	private void showGanttView() {
+		// Hide table view
+		tabPaneProfiles.setVisible(false);
+		tabPaneProfiles.setManaged(false);
+		
+		// Load and show Gantt view if not already loaded
+		if (ganttViewNode == null) {
+			try {
+				javafx.fxml.FXMLLoader loader = new javafx.fxml.FXMLLoader(
+					getClass().getResource("/cl/camodev/wosbot/taskmanager/view/TaskGanttOverview.fxml")
+				);
+				ganttViewNode = loader.load();
+				ganttViewController = loader.getController();
+			} catch (java.io.IOException e) {
+				e.printStackTrace();
+				// If loading fails, revert to table view
+				showTableView();
+				showingGanttView = false;
+				btnToggleView.setText("📊 Timeline View");
+				return;
+			}
+		}
+		if (ganttViewController != null && txtFilterTaskName != null) {
+			ganttViewController.setTaskFilter(txtFilterTaskName.getText());
+		}
+		
+		// Add to container if not already there
+		if (!ganttViewContainer.getChildren().contains(ganttViewNode)) {
+			ganttViewContainer.getChildren().clear();
+			ganttViewContainer.getChildren().add(ganttViewNode);
+		}
+		
+		ganttViewContainer.setVisible(true);
+		ganttViewContainer.setManaged(true);
+	}
+	
+	private void showTableView() {
+		// Hide Gantt view
+		ganttViewContainer.setVisible(false);
+		ganttViewContainer.setManaged(false);
+		
+		// Show table view
+		tabPaneProfiles.setVisible(true);
+		tabPaneProfiles.setManaged(true);
+	}
 
+	private void setupFilterListener() {
+		if (txtFilterTaskName != null) {
+			txtFilterTaskName.textProperty().addListener((observable, oldValue, newValue) -> {
+				applyFilter(newValue);
+			});
+		}
+	}
+
+	private void applyFilter(String filterText) {
+		String filter = filterText == null ? "" : filterText.toLowerCase().trim();
+
+		filteredTasks.forEach((profileId, filteredList) -> {
+			filteredList.setPredicate(task -> {
+				if (filter.isEmpty()) {
+					return true;
+				}
+				return task.getTaskName().toLowerCase().contains(filter);
+			});
+		});
+
+		if (ganttViewController != null) {
+			ganttViewController.setTaskFilter(filterText);
+		}
+	}
+
+	// Method to update time-dependent values and trigger reordering
+	private void updateTimeValues() {
+		Platform.runLater(() -> {
+			LocalDateTime now = LocalDateTime.now();
+			globalClock.set(now);
+
+			// Update all tables for all profiles
+			tasks.forEach((profileId, dataList) -> {
+				boolean needsReorder = false;
+
+				for (TaskManagerAux task : dataList) {
+					if (task.getNextExecution() != null) {
+						long newSeconds = ChronoUnit.SECONDS.between(now, task.getNextExecution());
+						long oldSeconds = task.getNearestMinutesUntilExecution();
+						boolean newReady = newSeconds <= 0;
+						boolean oldReady = task.hasReadyTask();
+
+						// Update values if they changed
+						if (newSeconds != oldSeconds || newReady != oldReady) {
+							task.setNearestMinutesUntilExecution(Math.max(0, newSeconds));
+							task.setHasReadyTask(newReady);
+							needsReorder = true;
+						}
+					}
+				}
+
+				// Reorder the table if any time values changed
+				if (needsReorder) {
+					FXCollections.sort(dataList, TASK_AUX_COMPARATOR);
+				}
+			});
+		});
 	}
 
 	private void loadProfiles() {
@@ -74,26 +220,44 @@ public class TaskManagerLayoutController {
 				if (tabPaneProfiles == null)
 					return;
 
-				for (DTOProfiles profile : dtoProfiles) {
+				// Create a set of current profile IDs for efficient lookup
+				Set<Long> currentProfileIds = dtoProfiles.stream()
+						.map(DTOProfiles::getId)
+						.collect(Collectors.toSet());
 
-					Tab existing = profileTabsMap.get(profile.getId());
-					if (existing == null) {
-						// Nuevo perfil → crea tab
+				// Remove tabs for deleted profiles
+				profileTabsMap.entrySet().removeIf(entry -> {
+					if (!currentProfileIds.contains(entry.getKey())) {
+						tabPaneProfiles.getTabs().remove(entry.getValue());
+						tasks.remove(entry.getKey());
+						filteredTasks.remove(entry.getKey());
+						return true;
+					}
+					return false;
+				});
+
+				// Add new tabs and update existing ones
+				for (DTOProfiles profile : dtoProfiles) {
+					Tab existingTab = profileTabsMap.get(profile.getId());
+					if (existingTab == null) {
+						// New profile -> create tab
 						Tab newTab = createProfileTab(profile);
 						profileTabsMap.put(profile.getId(), newTab);
 						tabPaneProfiles.getTabs().add(newTab);
 					} else {
-//						refreshProfileTab(profile);
+						// Existing profile -> update name
+						if (!existingTab.getText().equals(profile.getName())) {
+							existingTab.setText(profile.getName());
+						}
 					}
 				}
 
-				SingleSelectionModel<Tab> sel = tabPaneProfiles.getSelectionModel();
-				if (!tabPaneProfiles.getTabs().isEmpty()) {
-					sel.select(0);
+				// If no tab is selected and there are tabs, select the first one
+				if (tabPaneProfiles.getSelectionModel().getSelectedItem() == null && !tabPaneProfiles.getTabs().isEmpty()) {
+					tabPaneProfiles.getSelectionModel().selectFirst();
 				}
 			});
 		});
-
 	}
 
 	private Tab createProfileTab(DTOProfiles profile) {
@@ -101,22 +265,40 @@ public class TaskManagerLayoutController {
 		tab.setClosable(false);
 		tab.setUserData(profile.getId());
 
-		// 1) Prepara la tabla y la lista observable vacía
+		// 1) Prepare the table and the empty observable list
 		ObservableList<TaskManagerAux> dataList = FXCollections.observableArrayList();
+
+		// 2) Create FilteredList for filtering
+		FilteredList<TaskManagerAux> filteredList = new FilteredList<>(dataList);
+
 		TableView<TaskManagerAux> table = createTaskTable();
-		table.setItems(dataList);
-		// Guarda la lista para futuras actualizaciones
+		table.setItems(filteredList);
+
+		// Save both lists for future updates
 		tasks.put(profile.getId(), dataList);
+		filteredTasks.put(profile.getId(), filteredList);
 		tab.setContent(table);
 
-		// 2) Llama al builder asíncrono y actualiza la tabla cuando esté listo
+		// 3) Call the asynchronous builder and update the table when ready
 		buildTaskManagerList(profile, list -> {
-			// Siempre desde JavaFX Application Thread
+			// Always from JavaFX Application Thread
 			dataList.setAll(list);
 			FXCollections.sort(dataList, TASK_AUX_COMPARATOR);
+
+			// Apply the current filter if it exists
+			if (txtFilterTaskName != null && !txtFilterTaskName.getText().isEmpty()) {
+				applyFilter(txtFilterTaskName.getText());
+			}
 		});
 
 		return tab;
+	}
+
+	@Override
+	public void onProfileDataChanged(DTOProfiles profile) {
+		Platform.runLater(() -> {
+			loadProfiles();
+		});
 	}
 
 //	private void refreshProfileTab(DTOProfiles profile) {
@@ -129,16 +311,16 @@ public class TaskManagerLayoutController {
 //	}
 
 	/**
-	 * Recarga el estado de las tareas y, cuando estén disponibles, construye la lista de TaskManagerAux y la entrega al consumidor.
+	 * Reloads the task status and, when available, builds the TaskManagerAux list and delivers it to the consumer.
 	 */
 	private void buildTaskManagerList(DTOProfiles profile, Consumer<List<TaskManagerAux>> onListReady) {
-		// Ahora `statuses` es una List<DTODailyTaskStatus>
+		// Now `statuses` is a List<DTODailyTaskStatus>
 		taskManagerActionController.loadDailyTaskStatus(profile.getId(), (List<DTODailyTaskStatus> statuses) -> {
 			List<TaskManagerAux> list = Arrays.stream(TpDailyTaskEnum.values()).map(task -> {
-				// Busca el status cuyo ID coincida con el ID de la tarea
-//				System.out.println(">>> statuses.size=" + statuses.size() + "  buscando id=" + task.getId());
+				// Search for the status whose ID matches the task ID
+//				System.out.println(">>> statuses.size=" + statuses.size() + "  searching for id=" + task.getId());
 
-				DTODailyTaskStatus s = statuses.stream().filter(st -> st.getIdTpDailyTask() == task.getId()) // o st.getTaskId()
+				DTODailyTaskStatus s = statuses.stream().filter(st -> st.getIdTpDailyTask() == task.getId()) // or st.getTaskId()
 						.findFirst().orElse(null);
 
 				if (s == null) {
@@ -185,8 +367,9 @@ public class TaskManagerLayoutController {
 		colTaskName.setPrefWidth(200);
 		colTaskName.setCellFactory(column -> new TableCell<TaskManagerAux, String>() {
 			private final ImageView imageView = new ImageView();
+
 			{
-				// Ajusta tamaño del icono si es necesario
+				// Adjust icon size if necessary
 				imageView.setFitWidth(16);
 				imageView.setFitHeight(16);
 			}
@@ -200,13 +383,12 @@ public class TaskManagerLayoutController {
 					setStyle("");
 				} else {
 					setText(item);
-					// Obtén el objeto de la fila actual
+					// Get the current row's object
 					TaskManagerAux task = getTableRow().getItem();
 					if (task != null) {
-						// Elige el icono según la propiedad booleana
-						boolean flag = task.scheduledProperty().get();
-						imageView.setImage(flag ? iconTrue : iconFalse);
-						setGraphic(imageView);
+						// Choose the icon based on the boolean property
+                        ImageView iv = getTaskStatusIcon(task, imageView);
+                        setGraphic(iv);
 						setContentDisplay(ContentDisplay.LEFT);
 					} else {
 						setGraphic(null);
@@ -257,7 +439,7 @@ public class TaskManagerLayoutController {
 				if (diff <= 0) {
 					return "Ready";
 				} else if (diff < 60) {
-					return diff + "s~";
+					return diff + "s";
 				} else if (diff < 3600) {
 					long min = diff / 60;
 					return min + "m";
@@ -281,9 +463,9 @@ public class TaskManagerLayoutController {
 				if (empty || item == null) {
 					setText(null);
 					getStyleClass().removeAll(
-						"next-execution-ready", "next-execution-never", "next-execution-executing", "next-execution-seconds",
-						"next-execution-minutes-short", "next-execution-minutes-medium", "next-execution-minutes-long",
-						"next-execution-hours", "next-execution-days"
+							"next-execution-ready", "next-execution-never", "next-execution-executing", "next-execution-seconds",
+							"next-execution-minutes-short", "next-execution-minutes-medium", "next-execution-minutes-long",
+							"next-execution-hours", "next-execution-days"
 					);
 					setStyle("");
 					return;
@@ -292,9 +474,9 @@ public class TaskManagerLayoutController {
 
 				// Remove all custom classes first
 				getStyleClass().removeAll(
-					"next-execution-ready", "next-execution-never", "next-execution-executing", "next-execution-seconds",
-					"next-execution-minutes-short", "next-execution-minutes-medium", "next-execution-minutes-long",
-					"next-execution-hours", "next-execution-days"
+						"next-execution-ready", "next-execution-never", "next-execution-executing", "next-execution-seconds",
+						"next-execution-minutes-short", "next-execution-minutes-medium", "next-execution-minutes-long",
+						"next-execution-hours", "next-execution-days"
 				);
 
 				// Assign class based on value
@@ -304,7 +486,7 @@ public class TaskManagerLayoutController {
 					getStyleClass().add("next-execution-never");
 				} else if ("Executing".equals(item)) {
 					getStyleClass().add("next-execution-executing");
-				} else if (item.endsWith("s~")) {
+				} else if (item.endsWith("s")) {
 					getStyleClass().add("next-execution-seconds");
 				} else if (item.matches("\\d+m")) {
 					int min = Integer.parseInt(item.replace("m", ""));
@@ -324,85 +506,204 @@ public class TaskManagerLayoutController {
 		});
 
 		TableColumn<TaskManagerAux, Void> colActions = new TableColumn<>("Actions");
-		colActions.setPrefWidth(100);
+		colActions.setPrefWidth(250); // Increase width to accommodate the third button
 		colActions.setCellFactory(column -> new TableCell<>() {
-			private final Button btnExecute = new Button("Execute Now");
+			private final Button btnSchedule = new Button("Schedule");
+			private final Button btnRemove = new Button("Remove");
+			private final Button btnExecute = new Button("Execute");
+
 			{
-				btnExecute.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-size: 12px; " + "-fx-padding: 6px 12px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+				btnSchedule.setStyle("-fx-background-color: #2196F3; -fx-text-fill: white; -fx-font-size: 11px; " +
+						"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+				btnRemove.setStyle("-fx-background-color: #f44336; -fx-text-fill: white; -fx-font-size: 11px; " +
+						"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+				btnExecute.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-size: 11px; " +
+						"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+
+				btnSchedule.setOnAction(ev -> {
+					TaskManagerAux item = getTableView().getItems().get(getIndex());
+					taskManagerActionController.showScheduleDialog(item);
+				});
+
+				btnRemove.setOnAction(ev -> {
+					TaskManagerAux item = getTableView().getItems().get(getIndex());
+					DTOProfiles profile = taskManagerActionController.findProfileById(item.getProfileId());
+
+					taskManagerActionController.removeTask(item, () -> {
+						// Refresh the table after successful removal
+						buildTaskManagerList(profile, list -> {
+							ObservableList<TaskManagerAux> dataList = tasks.get(profile.getId());
+							if (dataList != null) {
+								dataList.setAll(list);
+								FXCollections.sort(dataList, TASK_AUX_COMPARATOR);
+							}
+						});
+					});
+				});
+
 				btnExecute.setOnAction(ev -> {
 					TaskManagerAux item = getTableView().getItems().get(getIndex());
-					List<DTOProfiles> allProfiles = ServProfiles.getServices().getProfiles();
-					DTOProfiles profile = allProfiles.stream().filter(p -> p.getId().equals(item.getProfileId())).findFirst().orElse(null);
+					DTOProfiles profile = taskManagerActionController.findProfileById(item.getProfileId());
 
-					if (profile == null) {
-						System.err.println("Profile not found: " + item.getProfileId());
-						return;
-					}
+					taskManagerActionController.executeTaskDirectly(item);
 
-					ServScheduler scheduler = ServScheduler.getServices();
-					scheduler.updateDailyTaskStatus(profile, item.getTaskEnum(), LocalDateTime.now());
-					scheduler.getQueueManager().getQueue(profile.getId()).executeTaskNow(item.getTaskEnum());
-
+					// Refresh the table after execution
+					buildTaskManagerList(profile, list -> {
+						ObservableList<TaskManagerAux> dataList = tasks.get(profile.getId());
+						if (dataList != null) {
+							dataList.setAll(list);
+							FXCollections.sort(dataList, TASK_AUX_COMPARATOR);
+						}
+					});
 				});
 			}
 
 			@Override
 			protected void updateItem(Void item, boolean empty) {
 				super.updateItem(item, empty);
-				setGraphic(empty ? null : btnExecute);
+				if (empty) {
+					setGraphic(null);
+				} else {
+					// Get the task data to check its state
+					TaskManagerAux task = getTableRow().getItem();
+
+					if (task != null) {
+						// Check if queue is active for this profile
+						boolean queueActive = ServScheduler.getServices().getQueueManager().getQueue(task.getProfileId()) != null;
+
+						// Enable/disable schedule button based on queue status
+						btnSchedule.setDisable(!queueActive);
+
+						// Update schedule button style when disabled
+						if (!queueActive) {
+							btnSchedule.setStyle("-fx-background-color: #757575; -fx-text-fill: #bdbdbd; -fx-font-size: 11px; " +
+									"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+						} else {
+							btnSchedule.setStyle("-fx-background-color: #2196F3; -fx-text-fill: white; -fx-font-size: 11px; " +
+									"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+						}
+
+						// Enable/disable remove button based on task state
+						boolean canRemove = task.scheduledProperty().get() && !task.executingProperty().get();
+						btnRemove.setDisable(!canRemove);
+
+						// Update remove button style when disabled
+						if (!canRemove) {
+							btnRemove.setStyle("-fx-background-color: #757575; -fx-text-fill: #bdbdbd; -fx-font-size: 11px; " +
+									"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+						} else {
+							btnRemove.setStyle("-fx-background-color: #f44336; -fx-text-fill: white; -fx-font-size: 11px; " +
+									"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+						}
+
+						// Enable/disable execute button based on queue status and task execution state
+						boolean canExecute = queueActive && !task.executingProperty().get();
+						btnExecute.setDisable(!canExecute);
+
+						// Update execute button style when disabled
+						if (!canExecute) {
+							btnExecute.setStyle("-fx-background-color: #757575; -fx-text-fill: #bdbdbd; -fx-font-size: 11px; " +
+									"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+						} else {
+							btnExecute.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-size: 11px; " +
+									"-fx-padding: 4px 8px; -fx-border-radius: 3px; -fx-background-radius: 3px;");
+						}
+					}
+
+					// Create HBox to hold all three buttons
+					HBox buttonBox = new HBox(5);
+					buttonBox.getChildren().addAll(btnSchedule, btnRemove, btnExecute);
+					setGraphic(buttonBox);
+				}
 			}
 		});
 
-		table.getColumns().addAll(colTaskName, colLastExecution, colNextExecution, colActions);
-		table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+		table.getColumns().add(colTaskName);
+		table.getColumns().add(colLastExecution);
+		table.getColumns().add(colNextExecution);
+		table.getColumns().add(colActions);
+		table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
 
 		return table;
 	}
 
+    public void updateTabOrder () {
+        profileTabsMap.forEach((profileId, tab) -> {
+            if (ServScheduler.getServices().getQueueManager().getQueue(profileId) != null) {
+                DTOProfiles profile = ServScheduler.getServices().getQueueManager().getQueue(profileId).getProfile();
+                ImageView iv = new ImageView();
+                if (profile.getQueuePosition() == 0) {
+                    iv.setImage(iconTrue);
+                } else if (profile.getQueuePosition() == Integer.MAX_VALUE && profile.getEnabled()) {
+                    iv.setImage(iconIdle);
+                } else if (!profile.getEnabled()) {
+                    iv.setImage(iconFalse);
+                } else if (profile.getQueuePosition() != 0 && profile.getQueuePosition() != Integer.MAX_VALUE){
+                    iv.setImage(iconWaiting);
+                }
+                iv.setFitWidth(16);
+                iv.setFitHeight(16);
+                profileTabsMap.get(profileId).graphicProperty().set(iv);
+            }
+        });
+
+        List<Tab> sortedTabs = profileTabsMap.entrySet().stream()
+                .sorted((e1, e2) -> {
+                    if (Objects.equals(e1.getKey(), e2.getKey())) return 0;
+                    TaskQueue q1 = ServScheduler.getServices().getQueueManager().getQueue(e1.getKey());
+                    TaskQueue q2 = ServScheduler.getServices().getQueueManager().getQueue(e2.getKey());
+                    boolean b1 = q1 != null;
+                    boolean b2 = q2 != null;
+                    if (b1 && b2) {
+                        int queuePos1 = q1.getProfile().getQueuePosition();
+                        int queuePos2 = q2.getProfile().getQueuePosition();
+                        if (queuePos1 == Integer.MAX_VALUE && queuePos2 == Integer.MAX_VALUE) return q1.getDelay().isAfter(q2.getDelay()) ? 1 : -1;
+                        return queuePos1 > queuePos2 ? 1 : -1;
+                    }
+                    return b1 ? -1 : 1; // true first
+                })
+                .map(Map.Entry::getValue)
+                .collect(Collectors.toList());
+        tabPaneProfiles.getTabs().setAll(sortedTabs);
+    }
+
+    private ImageView getTaskStatusIcon(TaskManagerAux task, ImageView iv) {
+        boolean flag = task.scheduledProperty().get();
+        boolean waiting = !task.isExecuting() && !task.hasReadyTask() && task.isScheduled() && ChronoUnit.SECONDS.between(LocalDateTime.now(), task.getNextExecution()) >= 60;
+        if (waiting) {
+            iv.setImage(iconWaiting);
+        } else if (flag) {
+            iv.setImage(iconTrue);
+        } else {
+            if (Objects.equals(task.getTaskName(), "Initialize") || task.getNextExecution() != null) {
+                iv.setImage(iconWaiting);
+            }
+            iv.setImage(iconIdle);
+        }
+        return iv;
+    }
+
 	public void updateTaskStatus(Long profileId, int taskNameId, DTOTaskState taskState) {
 		Platform.runLater(() -> {
-			ObservableList<TaskManagerAux> dataList = tasks.get(profileId);
-			if (dataList == null)
-				return;
-			Optional<TaskManagerAux> optionalTask = dataList.stream().filter(aux -> aux.getTaskEnum().getId() == taskNameId).findFirst();
-			if (!optionalTask.isPresent())
-				return;
+            ObservableList<TaskManagerAux> dataList = tasks.get(profileId);
+            if (dataList == null)
+                return;
+            Optional<TaskManagerAux> optionalTask = dataList.stream().filter(aux -> aux.getTaskEnum().getId() == taskNameId).findFirst();
+            if (!optionalTask.isPresent())
+                return;
 
-			Tab t = profileTabsMap.get(profileId);
-			boolean hasQueue = ServScheduler
-					.getServices()
-					.getQueueManager()
-					.getQueue(profileId) != null;
+            TaskManagerAux taskAux = optionalTask.get();
+            taskAux.setLastExecution(taskState.getLastExecutionTime());
+            taskAux.setNextExecution(taskState.getNextExecutionTime());
+            taskAux.setScheduled(taskState.isScheduled());
+            taskAux.setExecuting(taskState.isExecuting());
+            taskAux.setHasReadyTask(taskState.getNextExecutionTime() != null && ChronoUnit.SECONDS.between(LocalDateTime.now(), taskState.getNextExecutionTime()) <= 0);
+            taskAux.setNearestMinutesUntilExecution(taskState.getNextExecutionTime() != null ? ChronoUnit.SECONDS.between(LocalDateTime.now(), taskState.getNextExecutionTime()) : Long.MAX_VALUE);
 
-			ImageView iv = new ImageView(hasQueue ? iconTrue : iconFalse);
+            FXCollections.sort(dataList, TASK_AUX_COMPARATOR);
 
-			iv.setFitWidth(16);
-			iv.setFitHeight(16);
-
-			t.setGraphic(iv);
-			TaskManagerAux taskAux = optionalTask.get();
-			taskAux.setLastExecution(taskState.getLastExecutionTime());
-			taskAux.setNextExecution(taskState.getNextExecutionTime());
-			taskAux.setScheduled(taskState.isScheduled());
-			taskAux.setExecuting(taskState.isExecuting());
-			taskAux.setHasReadyTask(taskState.getNextExecutionTime() != null && ChronoUnit.SECONDS.between(LocalDateTime.now(), taskState.getNextExecutionTime()) <= 0);
-			taskAux.setNearestMinutesUntilExecution(taskState.getNextExecutionTime() != null ? ChronoUnit.SECONDS.between(LocalDateTime.now(), taskState.getNextExecutionTime()) : Long.MAX_VALUE);
-
-			FXCollections.sort(dataList, TASK_AUX_COMPARATOR);
-
-			List<Tab> sortedTabs = profileTabsMap.entrySet().stream()
-					.sorted((e1, e2) -> {
-
-						boolean b1 = ServScheduler.getServices().getQueueManager().getQueue(e1.getKey()) != null;
-						boolean b2 = ServScheduler.getServices().getQueueManager().getQueue(e2.getKey()) != null;
-						if (b1 == b2) return 0;
-						return b1 ? -1 : 1; // true primero
-					})
-					.map(Map.Entry::getValue)
-					.collect(Collectors.toList());
-			tabPaneProfiles.getTabs().setAll(sortedTabs);
-		});
-
+            updateTabOrder();
+        });
 	}
-
 }
+

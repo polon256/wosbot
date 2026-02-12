@@ -364,7 +364,7 @@
 	-fx-translate-x: 25px;
 }
 
-.thumb {
+.toggle-button .thumb {
 	-fx-background-color: white;
 	-fx-background-radius: 50%;
 	-fx-min-width: 20px;
@@ -466,3 +466,265 @@
     -fx-text-fill: #ff5722 !important;
     -fx-font-size: 14px;
 }
+
+
+/* ScrollPane dark theme */
+.scroll-pane {
+    -fx-background-color: #2a2a3d; /* Match app dark background */
+    -fx-background: #2a2a3d;
+    -fx-border-color: transparent;
+}
+
+.scroll-pane > .viewport {
+    -fx-background-color: transparent; /* Let content inherit dark backgrounds */
+}
+
+.scroll-pane .corner {
+    -fx-background-color: #2a2a3d; /* Hide light corner */
+}
+
+/* Scroll bars inside ScrollPane */
+.scroll-pane .scroll-bar {
+    -fx-background-color: transparent; /* Transparent track background */
+}
+
+.scroll-pane .scroll-bar .track {
+    -fx-background-color: rgba(255, 255, 255, 0.06);
+    -fx-background-insets: 0;
+    -fx-background-radius: 2;
+}
+
+.scroll-pane .scroll-bar .thumb {
+    -fx-background-color: #ffa500; /* Orange thumb to match theme */
+    -fx-background-insets: 1; /* Make thumb visually slimmer to reveal track */
+    -fx-background-radius: 4;
+}
+
+.scroll-pane .increment-button,
+.scroll-pane .decrement-button {
+    -fx-background-color: transparent;
+    -fx-padding: 0; /* Make buttons compact for thinner bar */
+}
+
+/* Make ScrollPane scroll bars thinner */
+.scroll-pane .scroll-bar:vertical {
+    -fx-pref-width: 8px;
+}
+
+.scroll-pane .scroll-bar:horizontal {
+    -fx-pref-height: 8px;
+}
+
+/* ========================================
+   Priority List View Styles
+   ======================================== */
+
+/* List View Container */
+.priority-list-view {
+    -fx-background-color: #2b2b2b;
+    -fx-border-color: #3c3f41;
+    -fx-border-width: 1px;
+}
+
+/* List Cell Base Style */
+.priority-list-cell {
+    -fx-background-color: #2b2b2b;
+    -fx-text-fill: #cccccc;
+}
+
+/* List Cell Hover Effect */
+.priority-list-cell:hover {
+    -fx-background-color: #313335;
+}
+
+/* List Cell - Drag Over Top */
+.priority-list-cell-drag-over-top {
+    -fx-background-color: #2b2b2b;
+    -fx-border-color: #4A9EFF transparent transparent transparent;
+    -fx-border-width: 2 0 0 0;
+}
+
+/* List Cell - Drag Over Bottom */
+.priority-list-cell-drag-over-bottom {
+    -fx-background-color: #2b2b2b;
+    -fx-border-color: transparent transparent #4A9EFF transparent;
+    -fx-border-width: 0 0 2 0;
+}
+
+/* Drag Indicator (☰ icon) */
+.priority-drag-indicator {
+    -fx-font-size: 14px;
+    -fx-text-fill: #808080;
+    -fx-cursor: hand;
+}
+
+.priority-drag-indicator-disabled {
+    -fx-font-size: 14px;
+    -fx-text-fill: #555555;
+    -fx-cursor: hand;
+}
+
+/* Priority Number Label */
+.priority-label {
+    -fx-font-weight: bold;
+    -fx-font-size: 12px;
+    -fx-text-fill: #4A9EFF;
+}
+
+.priority-label-disabled {
+    -fx-font-weight: bold;
+    -fx-font-size: 12px;
+    -fx-text-fill: #ff5555;
+}
+
+/* Item Name Label */
+.priority-name-label {
+    -fx-font-size: 12px;
+    -fx-text-fill: #cccccc;
+    -fx-opacity: 1.0;
+}
+
+.priority-name-label-disabled {
+    -fx-font-size: 12px;
+    -fx-text-fill: #888888;
+    -fx-opacity: 0.5;
+}
+
+/*!* Global dark theme styling for the launcher *!*/
+/*.root {*/
+/*    -fx-base: #1f2333;*/
+/*    -fx-background-color: #1f2333;*/
+/*    -fx-text-fill: #f5f5f5;*/
+/*}*/
+
+/*.label {*/
+/*    -fx-text-fill: #ffb347;*/
+/*    -fx-font-weight: bold;*/
+/*}*/
+
+.button,
+.split-menu-button {
+    -fx-background-color: linear-gradient(#f87e00, #d96800);
+    -fx-background-insets: 0;
+    -fx-background-radius: 6px;
+    -fx-text-fill: black;
+    -fx-font-weight: bold;
+    -fx-effect: dropshadow(three-pass-box, rgba(0, 0, 0, 0.35), 6, 0, 0, 2);
+}
+
+.button:hover,
+.split-menu-button:hover {
+    -fx-background-color: linear-gradient(#ff9800, #e57c00);
+}
+
+.button:pressed,
+.split-menu-button:pressed {
+    -fx-background-color: linear-gradient(#d96800, #b85600);
+}
+
+/*.button:disabled,*/
+/*.split-menu-button:disabled {*/
+/*    -fx-background-color: #555a6a;*/
+/*    -fx-text-fill: #b0b4c4;*/
+/*    -fx-effect: none;*/
+/*}*/
+
+.split-menu-button > .label,
+.split-menu-button > .arrow-button {
+    -fx-background-color: linear-gradient(#f87e00, #d96800);
+    -fx-background-insets: 0;
+    -fx-text-fill: white;
+}
+
+.split-menu-button > .label {
+    -fx-padding: 0 16px;
+    -fx-background-radius: 6px 0 0 6px;
+}
+
+.split-menu-button > .arrow-button {
+    -fx-border-color: rgba(0, 0, 0, 0.35);
+    -fx-border-width: 0 0 0 1;
+    -fx-padding: 0 12px;
+    -fx-background-radius: 0 6px 6px 0;
+}
+
+.split-menu-button > .arrow-button .arrow {
+    -fx-background-color: white;
+}
+
+.split-menu-button:hover > .label,
+.split-menu-button:hover > .arrow-button,
+.split-menu-button:showing > .label,
+.split-menu-button:showing > .arrow-button {
+    -fx-background-color: linear-gradient(#ff9800, #e57c00);
+}
+
+.split-menu-button:pressed > .label,
+.split-menu-button:pressed > .arrow-button {
+    -fx-background-color: linear-gradient(#d96800, #b85600);
+}
+
+.split-menu-button:disabled > .label,
+.split-menu-button:disabled > .arrow-button {
+    -fx-background-color: #555a6a;
+    -fx-text-fill: #b0b4c4;
+    -fx-border-color: transparent;
+}
+
+.context-menu {
+    -fx-background-color: #1f2333;
+    -fx-background-radius: 6px;
+    -fx-border-color: #3d425c;
+    -fx-border-radius: 6px;
+    -fx-border-width: 1px;
+    -fx-padding: 6px 0;
+}
+
+.menu-item {
+    -fx-padding: 8px 18px;
+    -fx-text-fill: #f5f5f5;
+    -fx-font-weight: normal;
+}
+
+.menu-item > .label {
+    -fx-text-fill: inherit;
+}
+
+.menu-item:focused,
+.menu-item:armed {
+    -fx-background-color: linear-gradient(#ff9800, #e57c00);
+    -fx-text-fill: white;
+}
+
+.menu-item:focused > .label,
+.menu-item:armed > .label {
+    -fx-text-fill: white;
+}
+
+.separator *.line {
+    -fx-background-color: #3d425c;
+}
+
+/*.combo-box {*/
+/*    -fx-background-color: #262a3b;*/
+/*    -fx-border-color: #3d425c;*/
+/*    -fx-border-radius: 4px;*/
+/*    -fx-background-radius: 4px;*/
+/*    -fx-text-fill: #f5f5f5;*/
+/*}*/
+
+/*.scroll-pane {*/
+/*    -fx-background-color: transparent;*/
+/*    -fx-border-color: #3d425c;*/
+/*}*/
+
+/*.table-view,*/
+/*.list-view {*/
+/*    -fx-background-color: #25293a;*/
+/*    -fx-table-cell-border-color: #3d425c;*/
+/*}*/
+
+/*.split-pane,*/
+/*.tab-pane {*/
+/*    -fx-background-color: #1f2333;*/
+/*}*/
